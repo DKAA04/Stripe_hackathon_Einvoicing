@@ -1,0 +1,540 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>InvoiceAgent</title>
+  <style>
+    :root {
+      --bg:#070b10; --panel:#0e151d; --panel2:#111b25; --card:#142130; --line:#223244;
+      --text:#eef6ff; --muted:#8fa1b5; --soft:#c7d5e6; --green:#28d89a; --green2:#0f8f68;
+      --blue:#64a8ff; --amber:#f4bd50; --red:#ff6b64; --violet:#a78bfa; --shadow:0 24px 80px rgba(0,0,0,.38);
+    }
+    * { box-sizing:border-box; }
+    body {
+      margin:0; min-height:100vh; color:var(--text); background:
+        radial-gradient(circle at 18% 0%, rgba(40,216,154,.16), transparent 32%),
+        radial-gradient(circle at 92% 8%, rgba(100,168,255,.14), transparent 34%),
+        linear-gradient(135deg, #06090d 0%, #09111a 48%, #0b1118 100%);
+      font:14px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Arial, sans-serif;
+    }
+    button, input { font:inherit; }
+    .shell { display:grid; grid-template-rows:auto 1fr; height:100vh; padding:16px; gap:14px; }
+    .topbar {
+      min-height:68px; display:flex; align-items:center; justify-content:space-between; gap:16px;
+      padding:12px 16px; border:1px solid var(--line); border-radius:8px; background:rgba(14,21,29,.88); box-shadow:var(--shadow);
+      backdrop-filter:blur(14px);
+    }
+    .brand { display:flex; align-items:center; gap:12px; min-width:260px; }
+    .logo {
+      width:42px; height:42px; border-radius:8px; display:grid; place-items:center; color:#05100c; font-weight:900;
+      background:linear-gradient(135deg, var(--green), #a8ffd8);
+      box-shadow:0 0 0 1px rgba(255,255,255,.14), 0 12px 30px rgba(40,216,154,.22);
+    }
+    h1 { margin:0; font-size:21px; letter-spacing:0; }
+    .subtitle { color:var(--muted); font-size:12px; margin-top:1px; }
+    .pills { display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:center; }
+    .pill {
+      display:inline-flex; align-items:center; gap:6px; min-height:30px; padding:5px 10px; border-radius:999px;
+      border:1px solid var(--line); color:var(--soft); background:#0b121a; font-size:12px; font-weight:800;
+    }
+    .pill.ok { border-color:rgba(40,216,154,.42); color:#baf8dc; background:rgba(40,216,154,.12); }
+    .pill.warn { border-color:rgba(244,189,80,.42); color:#ffe3a6; background:rgba(244,189,80,.12); }
+    .pill.info { border-color:rgba(100,168,255,.42); color:#cde4ff; background:rgba(100,168,255,.12); }
+    .reset {
+      border:1px solid var(--line); color:var(--text); background:#101925; min-height:38px; padding:0 13px; border-radius:7px;
+      cursor:pointer; font-weight:800;
+    }
+    .reset:hover { border-color:#385069; }
+    .main { display:grid; grid-template-columns:minmax(390px, 42%) minmax(520px, 58%); gap:14px; min-height:0; }
+    .chat, .proof {
+      border:1px solid var(--line); border-radius:8px; background:rgba(14,21,29,.9); box-shadow:var(--shadow); overflow:hidden; min-height:0;
+    }
+    .chat { display:grid; grid-template-rows:auto 1fr auto; }
+    .chatHead { padding:16px; border-bottom:1px solid var(--line); background:linear-gradient(180deg, rgba(20,33,48,.96), rgba(14,21,29,.92)); }
+    .chatHead h2, .pane h2 { margin:0; font-size:15px; }
+    .chatHead p { margin:5px 0 0; color:var(--muted); }
+    .scenarios { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:14px; }
+    .scenario {
+      text-align:left; min-height:58px; border:1px solid var(--line); border-radius:7px; padding:9px 10px;
+      color:var(--text); background:#0d1721; cursor:pointer; font-weight:800;
+    }
+    .scenario:hover { border-color:rgba(40,216,154,.48); background:#101f2b; }
+    .scenario small { display:block; color:var(--muted); font-weight:600; margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .messages { min-height:0; overflow:auto; padding:18px; display:flex; flex-direction:column; gap:12px; }
+    .bubble {
+      max-width:86%; padding:12px 14px; border-radius:8px; border:1px solid var(--line); white-space:pre-wrap;
+      animation:rise .18s ease-out; box-shadow:0 10px 24px rgba(0,0,0,.16);
+    }
+    .agent { align-self:flex-start; background:#101a25; color:#e7f1fb; }
+    .user { align-self:flex-end; background:linear-gradient(135deg, #0f8f68, #18b881); color:white; border-color:rgba(40,216,154,.45); }
+    .system { align-self:center; max-width:92%; color:#cfe4f6; background:rgba(100,168,255,.1); border-color:rgba(100,168,255,.32); }
+    @keyframes rise { from { opacity:0; transform:translateY(5px); } to { opacity:1; transform:translateY(0); } }
+    .composer { display:grid; grid-template-columns:auto 1fr auto; gap:9px; padding:14px; border-top:1px solid var(--line); background:#0b121a; }
+    .fileBtn, .sendBtn {
+      border:0; border-radius:7px; min-height:44px; padding:0 14px; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; font-weight:900;
+    }
+    .fileBtn { color:#cfe4f6; background:#142130; border:1px solid var(--line); }
+    .sendBtn { color:#04120d; background:linear-gradient(135deg, var(--green), #a8ffd8); }
+    .sendBtn[disabled] { opacity:.55; cursor:wait; }
+    .input {
+      width:100%; min-width:0; border:1px solid var(--line); border-radius:7px; outline:none; color:var(--text);
+      background:#111b25; padding:0 13px;
+    }
+    .input:focus { border-color:rgba(40,216,154,.65); box-shadow:0 0 0 3px rgba(40,216,154,.12); }
+    .proof { display:grid; grid-template-rows:auto 1fr; }
+    .tabs { display:flex; gap:8px; padding:12px; border-bottom:1px solid var(--line); background:#0b121a; overflow:auto; }
+    .tab {
+      border:1px solid var(--line); color:var(--soft); background:#101925; min-height:36px; padding:0 12px; border-radius:7px; cursor:pointer; font-weight:900; white-space:nowrap;
+    }
+    .tab.active { color:#06120d; background:linear-gradient(135deg, var(--green), #a8ffd8); border-color:transparent; }
+    .panes { min-height:0; overflow:auto; padding:16px; }
+    .pane { display:none; }
+    .pane.active { display:block; }
+    .grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }
+    .card {
+      border:1px solid var(--line); border-radius:8px; background:#101925; padding:13px; min-height:84px;
+    }
+    .card span { display:block; color:var(--muted); font-size:12px; font-weight:800; }
+    .card b { display:block; margin-top:6px; font-size:20px; letter-spacing:0; overflow-wrap:anywhere; }
+    .wide { grid-column:span 2; }
+    .section { margin-top:14px; border:1px solid var(--line); background:#101925; border-radius:8px; overflow:hidden; }
+    .sectionTitle { padding:12px 13px; border-bottom:1px solid var(--line); color:var(--soft); font-size:12px; font-weight:900; text-transform:uppercase; letter-spacing:.08em; }
+    .sectionBody { padding:13px; }
+    .timeline { display:grid; gap:9px; }
+    .event { display:grid; grid-template-columns:26px 1fr; gap:10px; align-items:start; color:var(--soft); }
+    .dot { width:22px; height:22px; border-radius:999px; display:grid; place-items:center; background:rgba(40,216,154,.13); color:var(--green); border:1px solid rgba(40,216,154,.35); font-size:12px; font-weight:900; }
+    .event small { display:block; color:var(--muted); margin-top:2px; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th, td { border-bottom:1px solid var(--line); padding:9px 7px; vertical-align:top; }
+    th { color:var(--muted); text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.08em; }
+    td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .account { color:#ffffff; font-weight:900; }
+    .muted { color:var(--muted); }
+    .empty {
+      min-height:260px; display:grid; place-items:center; text-align:center; color:var(--muted); border:1px dashed #2d4054; border-radius:8px; padding:24px;
+    }
+    .empty b { display:block; color:var(--text); font-size:18px; margin-bottom:7px; }
+    details { margin-top:14px; border:1px solid var(--line); border-radius:8px; background:#0b121a; }
+    summary { cursor:pointer; padding:12px 13px; color:var(--muted); font-weight:900; }
+    pre { margin:0; padding:13px; overflow:auto; color:#d6e7f7; border-top:1px solid var(--line); font-size:12px; }
+    @media (max-width: 1120px) {
+      .shell { height:auto; min-height:100vh; }
+      .main { grid-template-columns:1fr; }
+      .chat, .proof { min-height:620px; }
+      .grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    }
+    @media (max-width: 620px) {
+      .shell { padding:10px; }
+      .topbar { align-items:flex-start; flex-direction:column; }
+      .scenarios, .grid { grid-template-columns:1fr; }
+      .composer { grid-template-columns:1fr; }
+      .bubble { max-width:96%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">IA</div>
+        <div>
+          <h1>InvoiceAgent</h1>
+          <div class="subtitle">PEPPOL compliance proof plus Belgian double-entry accounting</div>
+        </div>
+      </div>
+      <div class="pills">
+        <span class="pill warn" id="tenantPill">Tenant pending</span>
+        <span class="pill ok" id="balancedPill">Books balanced</span>
+      </div>
+      <button class="reset" id="resetBtn">Reset ledger</button>
+    </header>
+
+    <main class="main">
+      <section class="chat">
+        <div class="chatHead">
+          <h2>WhatsApp-simple invoice agent</h2>
+          <p>Send a normal sentence or PDF. The backend extracts intent, creates compliance evidence, allocates a PCMN account, and posts balanced books.</p>
+          <div class="scenarios" id="scenarios"></div>
+        </div>
+        <div class="messages" id="messages">
+          <div class="bubble agent">Start with the golden path: supplier bill, client invoice, client payment. Every step updates the proof stack and ledger in real time.</div>
+        </div>
+        <div class="composer">
+          <label class="fileBtn">Upload PDF<input id="pdfInput" type="file" accept="application/pdf" hidden></label>
+          <input class="input" id="messageInput" value="I paid the plumber EUR 242 incl. 21% VAT" autocomplete="off">
+          <button class="sendBtn" id="sendBtn">Send</button>
+        </div>
+      </section>
+
+      <section class="proof">
+        <nav class="tabs">
+          <button class="tab active" data-tab="compliance">Compliance Proof</button>
+          <button class="tab" data-tab="journal">Journal</button>
+          <button class="tab" data-tab="trial">Trial Balance</button>
+          <button class="tab" data-tab="summary">VAT/Cash/AR/AP</button>
+          <button class="tab" data-tab="chart">Allocation</button>
+        </nav>
+        <div class="panes">
+          <div class="pane active" id="pane-compliance"></div>
+          <div class="pane" id="pane-journal"></div>
+          <div class="pane" id="pane-trial"></div>
+          <div class="pane" id="pane-summary"></div>
+          <div class="pane" id="pane-chart"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const state = { health:null, last:null, chart:null, busy:false };
+const fmt = (v) => `EUR ${Number(v || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}`;
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+
+function setBusy(busy) {
+  state.busy = busy;
+  $("sendBtn").disabled = busy;
+  $("sendBtn").textContent = busy ? "Working..." : "Send";
+}
+
+function bubble(text, kind = "agent") {
+  const node = document.createElement("div");
+  node.className = `bubble ${kind}`;
+  node.textContent = text;
+  $("messages").appendChild(node);
+  $("messages").scrollTop = $("messages").scrollHeight;
+  return node;
+}
+
+function empty(title, body) {
+  return `<div class="empty"><div><b>${esc(title)}</b><div>${esc(body)}</div></div></div>`;
+}
+
+function renderTop() {
+  const h = state.health || {};
+  const tenant = h.tenant || {};
+  $("tenantPill").className = `pill ${tenant.configured ? "ok" : "warn"}`;
+  $("tenantPill").textContent = tenant.company_name || (tenant.configured ? "Tenant configured" : "No tenant");
+  const ledger = state.last?.ledger;
+  $("balancedPill").className = `pill ${!ledger || ledger.balanced ? "ok" : "warn"}`;
+  $("balancedPill").textContent = !ledger || ledger.balanced ? "Books balanced" : "Books unbalanced";
+}
+
+function evidenceTimeline(data) {
+  const c = data?.compliance || {};
+  const status = {
+    demo_staged: "Outbound UBL-ready payload staged.",
+    sent: "Sent through e-invoice.be.",
+    sent_pending_id: "Accepted by e-invoice.be; external document ID pending.",
+    already_sent: "Already sent; duplicate Peppol transmission prevented.",
+    send_error: "Peppol send step failed.",
+    blocked_missing_api_key: "Blocked: missing e-invoice.be API key.",
+    blocked_missing_master_data: "Blocked: missing master data.",
+    inbound_staged: "Inbound supplier document staged; no outbound Peppol transmission.",
+    not_applicable: "Not applicable: payment is not a UBL invoice.",
+    error: "Peppol transmission failed.",
+  }[c.status] || c.reason || "Compliance decision waiting.";
+  const items = [
+    ["Parsed invoice", data?.invoice ? `${data.intent} for ${fmt(data.invoice.invoice_total)}` : "Waiting for transaction."],
+    ["Allocated account", data?.allocation ? `${data.allocation.account} ${data.allocation.account_name}` : "No allocation yet."],
+    ["Computed VAT", data?.invoice ? `Net ${fmt(data.invoice.subtotal)}, VAT ${fmt(data.invoice.total_tax)}, Gross ${fmt(data.invoice.invoice_total)}` : "No VAT computed yet."],
+    ["UBL/Peppol decision", status],
+    ["Posted balanced journal", data?.ledger ? `${data.journal_entries?.length || 1} entry/entries posted. Ledger balanced: ${data.ledger.balanced ? "yes" : "no"}.` : "No journal posted yet."],
+  ];
+  const extra = (c.evidence || []).map(line => ["Evidence", line]);
+  return [...items, ...extra].map(([title, detail]) => `<div class="event"><div class="dot">✓</div><div><b>${esc(title)}</b><small>${esc(detail)}</small></div></div>`).join("");
+}
+
+function renderCompliance() {
+  const data = state.last;
+  const h = state.health || {};
+  const tenant = h.tenant || {};
+  const c = data?.compliance || {};
+  const validation = c.validation || {};
+  const missing = c.missing_fields || [];
+  const messages = c.validation_messages || [];
+  const pdf = data?.pdf_extraction;
+  const statusLabel = {
+    demo_staged: "Outbound UBL-ready payload staged",
+    sent: "Sent through e-invoice.be",
+    sent_pending_id: "Accepted by e-invoice.be; external document ID pending",
+    already_sent: "Already sent; duplicate Peppol transmission prevented",
+    send_error: "Peppol send step failed",
+    blocked_missing_api_key: "Blocked: missing e-invoice.be API key",
+    blocked_missing_master_data: "Blocked: missing master data",
+    inbound_staged: "Inbound supplier document staged; no outbound Peppol transmission",
+    not_applicable: "Not applicable: payment is not a UBL invoice",
+    error: "Peppol transmission failed",
+  }[c.status] || c.status || "waiting";
+  $("pane-compliance").innerHTML = `
+    <div class="grid">
+      <div class="card"><span>CREATE_REAL_UBL</span><b>${h.create_real_ubl ? "Real sandbox" : "Demo mode"}</b></div>
+      <div class="card"><span>Company</span><b>${esc(tenant.company_name || "DemoCo BV")}</b></div>
+      <div class="card"><span>Peppol applicable</span><b>${c.applicability === "applicable" ? "Yes" : "No"}</b></div>
+      <div class="card wide"><span>Status</span><b>${esc(statusLabel)}</b></div>
+      <div class="card"><span>Action</span><b>${esc(c.peppol_action || "unknown")}</b></div>
+      <div class="card"><span>Direction</span><b>${esc(c.direction || "UNKNOWN")}</b></div>
+      <div class="card"><span>Document</span><b>${esc(c.document_type || "UNKNOWN")}</b></div>
+    </div>
+    <div class="section"><div class="sectionTitle">Transmission</div><div class="sectionBody">
+      <div class="grid">
+        <div class="card"><span>Transmission attempted</span><b>${c.transmission_attempted ? "Yes" : "No"}</b></div>
+        <div class="card"><span>Mode</span><b>${esc(c.mode || (h.create_real_ubl ? "Real" : "Demo"))}</b></div>
+        <div class="card"><span>API status code</span><b>${esc(c.api_status_code || "None")}</b></div>
+        <div class="card"><span>External doc ID</span><b>${esc(c.external_doc_id || "None")}</b></div>
+        <div class="card"><span>API error</span><b>${esc(c.api_error || "None")}</b></div>
+        <div class="card"><span>TLS verification fallback</span><b>${c.tls_verify_disabled ? "Used" : "Not used"}</b></div>
+      </div>
+      <div style="margin-top:10px">${missing.length ? missing.map(m => `<div class="pill warn" style="margin:3px">${esc(m)}</div>`).join("") : '<span class="pill ok">No missing required fields</span>'}</div>
+    </div></div>
+    <div class="section"><div class="sectionTitle">Reason</div><div class="sectionBody"><span class="muted">${esc(c.reason || "No compliance decision yet.")}</span></div></div>
+    ${c.sandbox_recipient_override ? `<div class="section"><div class="sectionTitle">Sandbox routing</div><div class="sectionBody"><span class="pill info">${esc(c.sandbox_recipient_override)}</span></div></div>` : ""}
+    <div class="section"><div class="sectionTitle">Validation messages</div><div class="sectionBody">${messages.length ? messages.map(m => `<div class="pill info" style="margin:3px">${esc(m)}</div>`).join("") : '<span class="muted">No validation messages yet.</span>'}</div></div>
+    <div class="section"><div class="sectionTitle">Evidence timeline</div><div class="sectionBody"><div class="timeline">${evidenceTimeline(data)}</div></div></div>
+    ${pdf ? `<div class="section"><div class="sectionTitle">PDF extraction</div><div class="sectionBody">
+      <div class="grid">
+        <div class="card"><span>Method</span><b>${esc(pdf.method || "unknown")}</b></div>
+        <div class="card"><span>Confidence</span><b>${esc(pdf.confidence || "unknown")}</b></div>
+        <div class="card"><span>Pages processed</span><b>${esc(pdf.pages ?? "0")}</b></div>
+      </div>
+      ${(pdf.warnings || []).length ? `<div style="margin-top:10px">${pdf.warnings.map(w => `<div class="pill warn" style="margin:3px">${esc(w)}</div>`).join("")}</div>` : ""}
+    </div></div>
+    <details open><summary>Extracted PDF text</summary><pre>${esc(pdf.text_preview || "")}</pre></details>` : ""}
+    <details open><summary>Payload preview</summary><pre>${c.payload_preview ? esc(JSON.stringify(c.payload_preview, null, 2)) : "No UBL payload: this transaction is not a UBL/Peppol invoice document."}</pre></details>
+    ${c.api_response ? `<details open><summary>API response preview</summary><pre>${esc(JSON.stringify(c.api_response, null, 2))}</pre></details>` : ""}
+    ${c.api_create_response ? `<details><summary>API create response</summary><pre>${esc(JSON.stringify(c.api_create_response, null, 2))}</pre></details>` : ""}
+    ${c.api_send_response ? `<details><summary>API send response</summary><pre>${esc(JSON.stringify(c.api_send_response, null, 2))}</pre></details>` : ""}
+    ${debugBlock(data)}
+  `;
+}
+
+function renderJournal() {
+  const entries = state.last?.journal_entries || (state.last?.journal ? [state.last.journal] : []);
+  if (!entries.length) { $("pane-journal").innerHTML = empty("No journal yet", "Run a scenario to see debit and credit lines posted automatically."); return; }
+  $("pane-journal").innerHTML = entries.map(entry => `
+    <div class="section">
+      <div class="sectionTitle">${esc(entry.intent)} - ${esc(entry.narrative)} ${entry.balanced ? '<span class="pill ok" style="float:right">Balanced</span>' : '<span class="pill warn" style="float:right">Check</span>'}</div>
+      <div class="sectionBody">
+        <table><thead><tr><th>Account</th><th class="num">Debit</th><th class="num">Credit</th></tr></thead><tbody>
+          ${entry.lines.map(line => `<tr><td><span class="account">${esc(line.account)}</span><br><span class="muted">${esc(line.account_name)}</span></td><td class="num">${Number(line.debit) ? fmt(line.debit) : ""}</td><td class="num">${Number(line.credit) ? fmt(line.credit) : ""}</td></tr>`).join("")}
+          <tr><td><b>Total</b></td><td class="num"><b>${fmt(entry.total_debit)}</b></td><td class="num"><b>${fmt(entry.total_credit)}</b></td></tr>
+        </tbody></table>
+      </div>
+    </div>`).join("");
+}
+
+function renderTrial() {
+  const ledger = state.last?.ledger;
+  if (!ledger || !Object.keys(ledger.trial_balance || {}).length) { $("pane-trial").innerHTML = empty("Trial balance waiting", "The first booked invoice will populate every touched account here."); return; }
+  $("pane-trial").innerHTML = `
+    <div class="pills" style="justify-content:flex-start;margin-bottom:12px"><span class="pill ${ledger.balanced ? "ok" : "warn"}">${ledger.balanced ? "Books balanced ✓" : "Books need review"}</span><span class="pill info">${ledger.account_count} accounts touched</span></div>
+    <div class="section"><div class="sectionTitle">Running trial balance</div><div class="sectionBody">
+      <table><thead><tr><th>Account</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead><tbody>
+      ${Object.entries(ledger.trial_balance).map(([code,row]) => `<tr><td><span class="account">${esc(code)}</span><br><span class="muted">${esc(row.name)}</span></td><td class="num">${fmt(row.debit)}</td><td class="num">${fmt(row.credit)}</td><td class="num">${fmt(row.balance)}</td></tr>`).join("")}
+      <tr><td><b>Total</b></td><td class="num"><b>${fmt(ledger.totals.debit)}</b></td><td class="num"><b>${fmt(ledger.totals.credit)}</b></td><td></td></tr>
+      </tbody></table>
+    </div></div>`;
+}
+
+function renderSummary() {
+  const ledger = state.last?.ledger;
+  if (!ledger) { $("pane-summary").innerHTML = empty("No balances yet", "KPI cards update after each transaction."); return; }
+  $("pane-summary").innerHTML = `
+    <div class="grid">
+      <div class="card"><span>VAT position</span><b>${fmt(ledger.vat_position)}</b></div>
+      <div class="card"><span>Cash movement</span><b>${fmt(ledger.cash_position)}</b></div>
+      <div class="card"><span>Open payables</span><b>${fmt(ledger.payables_open)}</b></div>
+      <div class="card"><span>Open receivables</span><b>${fmt(ledger.receivables_open)}</b></div>
+      <div class="card"><span>Accounts touched</span><b>${ledger.account_count}</b></div>
+      <div class="card"><span>Entries posted</span><b>${ledger.entries.length}</b></div>
+      <div class="card wide"><span>Latest entry</span><b>${esc(ledger.latest_entry?.narrative || "None")}</b></div>
+    </div>`;
+}
+
+function renderTrialModern() {
+  const ledger = state.last?.ledger;
+  if (!ledger || !Object.keys(ledger.trial_balance || {}).length) { $("pane-trial").innerHTML = empty("Trial balance waiting", "The first booked invoice will populate every touched account here."); return; }
+  const bs = ledger.balance_sheet || {};
+  const pl = ledger.profit_loss || {};
+  const grouped = ledger.grouped_trial_balance || {};
+  const groupOrder = ["Assets", "Liabilities", "Equity", "Expenses", "Revenue", "Mixed/Unclassified"];
+  const tableRows = (rows) => rows.map(row => `<tr><td><span class="account">${esc(row.code)}</span><br><span class="muted">${esc(row.name)}</span></td><td>${esc(row.meta?.category || "unknown")}</td><td>${esc(row.meta?.statement || "")}</td><td class="num">${fmt(row.debit)}</td><td class="num">${fmt(row.credit)}</td><td class="num">${fmt(row.balance)}</td></tr>`).join("");
+  $("pane-trial").innerHTML = `
+    <div class="grid">
+      <div class="card"><span>Assets</span><b>${fmt(bs.assets?.total)}</b></div>
+      <div class="card"><span>Liabilities</span><b>${fmt(bs.liabilities?.total)}</b></div>
+      <div class="card"><span>Equity</span><b>${fmt(bs.equity?.total)}</b></div>
+      <div class="card"><span>Expenses</span><b>${fmt(pl.expenses?.total)}</b></div>
+      <div class="card"><span>Revenue</span><b>${fmt(pl.revenue?.total)}</b></div>
+      <div class="card"><span>Profit/Loss</span><b>${fmt(pl.profit_loss)}</b></div>
+      <div class="card wide"><span>Trial balance control</span><b>${ledger.balanced ? "Balanced" : "Needs review"}</b></div>
+    </div>
+    <div class="pills" style="justify-content:flex-start;margin-top:12px">
+      ${groupOrder.map(group => `<span class="pill info">${esc(group)}: ${(grouped[group] || []).length}</span>`).join("")}
+    </div>
+    ${groupOrder.filter(group => (grouped[group] || []).length).map(group => `
+      <div class="section"><div class="sectionTitle">${esc(group)}</div><div class="sectionBody">
+        <table><thead><tr><th>Account</th><th>Category</th><th>Statement</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead><tbody>
+        ${tableRows(grouped[group])}
+        </tbody></table>
+      </div></div>`).join("")}
+    <div class="section"><div class="sectionTitle">Classic trial balance totals</div><div class="sectionBody">
+      <table><thead><tr><th>Total</th><th class="num">Debit</th><th class="num">Credit</th></tr></thead><tbody>
+      <tr><td><b>All posted entries</b></td><td class="num"><b>${fmt(ledger.totals.debit)}</b></td><td class="num"><b>${fmt(ledger.totals.credit)}</b></td></tr>
+      </tbody></table>
+    </div></div>`;
+}
+
+function renderSummaryModern() {
+  const ledger = state.last?.ledger;
+  if (!ledger) { $("pane-summary").innerHTML = empty("No balances yet", "KPI cards update after each transaction."); return; }
+  $("pane-summary").innerHTML = `
+    <div class="grid">
+      <div class="card"><span>VAT recoverable</span><b>${fmt(ledger.vat_recoverable)}</b></div>
+      <div class="card"><span>VAT payable</span><b>${fmt(ledger.vat_payable)}</b></div>
+      <div class="card"><span>Net VAT payable</span><b>${fmt(ledger.vat_position)}</b></div>
+      <div class="card"><span>Cash movement</span><b>${fmt(ledger.cash_position)}</b></div>
+      <div class="card"><span>Open payables</span><b>${fmt(ledger.payables_open)}</b></div>
+      <div class="card"><span>Open receivables</span><b>${fmt(ledger.receivables_open)}</b></div>
+      <div class="card"><span>Net assets effect</span><b>${fmt(ledger.balance_sheet?.net_assets)}</b></div>
+      <div class="card"><span>Profit/Loss</span><b>${fmt(ledger.profit_loss?.profit_loss)}</b></div>
+      <div class="card"><span>Accounts touched</span><b>${ledger.account_count}</b></div>
+      <div class="card"><span>Entries posted</span><b>${ledger.entries.length}</b></div>
+      <div class="card wide"><span>Latest entry</span><b>${esc(ledger.latest_entry?.narrative || "None")}</b></div>
+    </div>`;
+}
+
+function renderChart() {
+  const a = state.last?.allocation;
+  const chart = state.chart || {};
+  const accounts = chart.accounts || [];
+  $("pane-chart").innerHTML = `
+    ${a ? `<div class="section"><div class="sectionTitle">Latest allocation</div><div class="sectionBody">
+      <div class="grid">
+        <div class="card wide"><span>Account</span><b>${esc(a.account)} ${esc(a.account_name)}</b></div>
+        <div class="card"><span>Confidence</span><b>${Math.round((a.confidence || 0) * 100)}%</b></div>
+        <div class="card"><span>Matched keywords</span><b>${esc((a.matched_keywords || []).join(", ") || "Fallback")}</b></div>
+      </div>
+      <p class="muted">${esc(a.explanation || a.reason || "")}</p>
+      ${a.warning ? `<span class="pill warn">${esc(a.warning)}</span>` : ""}
+    </div></div>` : empty("Allocation card ready", "Run a scenario to see Belgian account intelligence.")}
+    <div class="section"><div class="sectionTitle">PCMN-style chart preview</div><div class="sectionBody">
+      <table><thead><tr><th>Code</th><th>Name</th><th>Category</th></tr></thead><tbody>
+      ${accounts.map(acc => `<tr><td><span class="account">${esc(acc.code)}</span></td><td>${esc(acc.name)}</td><td class="muted">${esc(acc.category)}</td></tr>`).join("")}
+      </tbody></table>
+    </div></div>`;
+}
+
+function debugBlock(data) {
+  if (!data) return "";
+  return `<details><summary>Debug raw JSON</summary><pre>${esc(JSON.stringify(data, null, 2))}</pre></details>`;
+}
+
+function renderAll() {
+  renderTop();
+  renderCompliance();
+  renderJournal();
+  renderTrialModern();
+  renderSummaryModern();
+  renderChart();
+}
+
+async function api(path, options) {
+  const response = await fetch(path, options);
+  const text = await response.text();
+  let data;
+  try { data = text ? JSON.parse(text) : {}; } catch { data = { reply:text }; }
+  if (!response.ok) throw new Error(data.detail || data.reply || `HTTP ${response.status}`);
+  return data;
+}
+
+async function sendMessage(message) {
+  if (!message.trim() || state.busy) return;
+  bubble(message, "user");
+  const pending = bubble("Working through extraction, compliance, VAT, allocation, and balanced posting...", "agent");
+  setBusy(true);
+  try {
+    const data = await api("/chat", { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify({ message }) });
+    state.last = data;
+    pending.textContent = data.reply || "Booked.";
+    if ((data.warnings || []).length) bubble(data.warnings.join("\n"), "system");
+    renderAll();
+  } catch (error) {
+    pending.textContent = `Stage-safe error: ${error.message}. The UI stayed up; reset or try another scenario.`;
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function uploadPdf(file) {
+  if (!file || state.busy) return;
+  bubble(`PDF uploaded: ${file.name}`, "user");
+  const pending = bubble("Extracting invoice data from PDF...", "agent");
+  setBusy(true);
+  try {
+    const form = new FormData();
+    form.append("file", file);
+    const data = await api("/chat/pdf", { method:"POST", body:form });
+    state.last = data;
+    pending.textContent = data.reply || "PDF processed.";
+    if (data.pdf_extraction) {
+      bubble(`PDF extracted via: ${data.pdf_extraction.method}\nConfidence: ${data.pdf_extraction.confidence}\nPages processed: ${data.pdf_extraction.pages}`, "system");
+    }
+    if ((data.warnings || []).length) bubble(data.warnings.join("\n"), "system");
+    renderAll();
+  } catch (error) {
+    pending.textContent = `PDF extraction failed: ${error.message}`;
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function init() {
+  try {
+    const [health, scenarios, chart] = await Promise.all([
+      api("/health"),
+      api("/demo/scenarios"),
+      api("/chart-of-accounts"),
+    ]);
+    state.health = health;
+    state.chart = chart;
+    $("scenarios").innerHTML = scenarios.scenarios.map(s => `<button class="scenario" data-message="${esc(s.message)}">${esc(s.title)}<small>${esc(s.message)}</small></button>`).join("");
+    document.querySelectorAll(".scenario").forEach(btn => btn.addEventListener("click", () => {
+      $("messageInput").value = btn.dataset.message;
+      sendMessage(btn.dataset.message);
+    }));
+  } catch (error) {
+    bubble(`Backend not ready: ${error.message}`, "system");
+  }
+  renderAll();
+}
+
+document.querySelectorAll(".tab").forEach(tab => tab.addEventListener("click", () => {
+  document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+  document.querySelectorAll(".pane").forEach(p => p.classList.remove("active"));
+  tab.classList.add("active");
+  $(`pane-${tab.dataset.tab}`).classList.add("active");
+}));
+
+$("sendBtn").addEventListener("click", () => {
+  const message = $("messageInput").value;
+  $("messageInput").value = "";
+  sendMessage(message);
+});
+$("messageInput").addEventListener("keydown", e => { if (e.key === "Enter") $("sendBtn").click(); });
+$("pdfInput").addEventListener("change", e => uploadPdf(e.target.files[0]));
+$("resetBtn").addEventListener("click", async () => {
+  try {
+    const data = await api("/reset", { method:"POST" });
+    state.last = { ledger:data.ledger, compliance:null, allocation:null, journal_entries:[], warnings:[] };
+    bubble("Ledger reset. Ready for the next stage run.", "system");
+    renderAll();
+  } catch (error) {
+    bubble(`Reset failed safely: ${error.message}`, "system");
+  }
+});
+init();
+</script>
+</body>
+</html>

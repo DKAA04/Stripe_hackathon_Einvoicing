@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+python-multipart
+python-dotenv
+e-invoice-api
+google-genai
+pytest
+httpx
+pymupdf

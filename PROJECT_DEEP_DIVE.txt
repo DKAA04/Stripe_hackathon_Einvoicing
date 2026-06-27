@@ -1,0 +1,2503 @@
+INVOICEAGENT PROJECT DEEP DIVE
+==============================
+
+Last updated: 2026-06-27
+Workspace: C:\Users\Usuario\einvoice-hack
+
+
+1. EXECUTIVE SUMMARY
+====================
+
+InvoiceAgent is a chat-first e-invoicing and accounting automation prototype.
+
+The product idea is simple:
+
+    A business owner types a normal sentence, such as:
+
+        "I paid the plumber EUR 242 incl. 21% VAT"
+
+    InvoiceAgent turns that sentence into:
+
+        - a structured invoice/payment object
+        - deterministic VAT calculations
+        - Belgian PCMN-style account allocation
+        - balanced double-entry bookkeeping
+        - trial balance proof
+        - VAT/cash/AP/AR summaries
+        - UBL/Peppol compliance decision evidence
+        - an audit-friendly payload preview
+
+It feels like a lightweight chat app, but behind the interface it behaves like a
+mini accounting and e-invoicing engine.
+
+The core product message:
+
+    "WhatsApp-simple invoicing input, audit-grade accounting output."
+
+InvoiceAgent is not just extracting invoice data. It is proving that every
+transaction is understood, classified, VAT-calculated, posted, and compliance
+checked through deterministic business logic.
+
+
+Current implementation status:
+
+    - Chat input works for supplier invoices, paid supplier invoices, outbound
+      invoices, credit notes, and payments.
+    - Text-based PDF upload performs real extraction with PyMuPDF.
+    - Scanned PDF extraction can use Gemini when GOOGLE_API_KEY is configured.
+    - VAT is computed deterministically with Decimal.
+    - Journals are posted only if balanced.
+    - Trial balance, balance sheet, P&L, VAT, cash, AP, and AR views are derived
+      from PCMN-style account metadata.
+    - Outbound invoices and outbound credit notes can be sent through the
+      e-invoice.be HTTP API when CREATE_REAL_UBL=1 and required credentials/master
+      data are present.
+    - Inbound supplier documents and bank payments are never sent as outbound
+      Peppol documents.
+
+
+2. THE PROBLEM IT SOLVES
+========================
+
+Small businesses increasingly need to deal with electronic invoicing, VAT,
+Peppol/UBL compliance, accounting records, and accountant-ready books.
+
+The pain points:
+
+    - Business owners do not want to learn full accounting software.
+    - Accountants still need structured, reliable journal entries.
+    - VAT mistakes are common, especially with inclusive vs exclusive amounts.
+    - E-invoicing rules are not the same for invoices, credit notes, and bank
+      payments.
+    - Demo tools often say "success" without proving what happened.
+    - LLM-only invoice extraction is risky if the model also performs the math.
+    - Trial balances may balance mathematically but still be poorly classified.
+
+InvoiceAgent solves this by separating natural-language understanding from
+deterministic accounting.
+
+The LLM or regex layer can help interpret intent, but the critical outputs are
+computed by deterministic Python:
+
+    - VAT math
+    - account allocation
+    - double-entry journal lines
+    - trial balance
+    - balance sheet grouping
+    - P&L grouping
+    - UBL/Peppol applicability decision
+
+
+3. HIGH-LEVEL PRODUCT EXPERIENCE
+================================
+
+The user opens the web interface and sees:
+
+    - a chat-style transaction input
+    - scenario buttons
+    - a proof panel with tabs:
+        - Compliance Proof
+        - Journal
+        - Trial Balance
+        - VAT/Cash/AR/AP
+        - Allocation
+
+The user can type a sentence like:
+
+    "I paid the plumber EUR 242 incl. 21% VAT"
+
+The app replies:
+
+    "Booked the purchase invoice for EUR 242.00 incl. EUR 42.00 VAT and
+    allocated it to 611 Maintenance and repairs. Inbound supplier invoice
+    staged; no outbound Peppol transmission. Invoice and bank payment were
+    posted separately."
+
+Behind that one sentence, the app performs multiple steps:
+
+    1. Extract intent and fields.
+    2. Normalize document structure.
+    3. Normalize VAT rate.
+    4. Compute net/VAT/gross.
+    5. Decide whether this is an invoice, credit note, or pure payment.
+    6. Allocate a Belgian-style account.
+    7. Build UBL/Peppol compliance result.
+    8. Generate journal entries.
+    9. Post entries to the in-memory ledger.
+    10. Recompute trial balance and financial summaries.
+    11. Render the proof in the frontend.
+
+
+4. CORE DEMO SCENARIOS
+======================
+
+The built-in scenarios are defined in demo_scenarios.py.
+
+Scenario 1: Paid supplier invoice
+---------------------------------
+
+Message:
+
+    "I paid the plumber EUR 242 incl. 21% VAT"
+
+Expected business interpretation:
+
+    - This is not a pure bank payment.
+    - It is a supplier invoice that has already been paid.
+    - Direction: INBOUND
+    - Document type: INVOICE
+    - Gross: EUR 242.00
+    - VAT rate: 21%
+    - Net: EUR 200.00
+    - VAT: EUR 42.00
+    - Account: 611 Maintenance and repairs
+
+Journal entries:
+
+    Purchase invoice recognition:
+
+        Dr 611 Maintenance and repairs      EUR 200.00
+        Dr 411 VAT recoverable/input VAT    EUR 42.00
+        Cr 440 Trade payables/Suppliers     EUR 242.00
+
+    Payment clearing:
+
+        Dr 440 Trade payables/Suppliers     EUR 242.00
+        Cr 550 Bank                         EUR 242.00
+
+Why this matters:
+
+    Many simple apps would book this as only:
+
+        Dr expense
+        Cr bank
+
+    InvoiceAgent intentionally books the supplier invoice first and then clears
+    the payable. That gives a cleaner audit trail:
+
+        - the invoice existed
+        - input VAT was recognized
+        - the supplier payable was created
+        - the bank payment cleared the payable
+
+
+Scenario 2: Supplier invoice from Proximus
+------------------------------------------
+
+Message:
+
+    "I received an invoice from Proximus for EUR 121 incl. 21% VAT"
+
+Expected interpretation:
+
+    - Direction: INBOUND
+    - Document type: INVOICE
+    - Gross: EUR 121.00
+    - Net: EUR 100.00
+    - VAT: EUR 21.00
+    - Account: 612 Utilities / energy / telecom
+    - Payable remains open because the user did not say it was paid.
+
+Journal:
+
+        Dr 612 Utilities / energy / telecom EUR 100.00
+        Dr 411 VAT recoverable/input VAT    EUR 21.00
+        Cr 440 Trade payables/Suppliers     EUR 121.00
+
+Compliance:
+
+    This is an inbound supplier invoice. DemoCo is the buyer/customer, not the
+    supplier. Therefore InvoiceAgent must not send a Peppol invoice as DemoCo.
+    It stages inbound evidence for audit preview.
+
+Status:
+
+    inbound_staged
+
+
+Scenario 3: Outbound client invoice
+-----------------------------------
+
+Message:
+
+    "Invoice Acme NV EUR 1,210 incl. 21% VAT for website services"
+
+Expected interpretation:
+
+    - Direction: OUTBOUND
+    - Document type: INVOICE
+    - Seller/vendor: DemoCo BV
+    - Buyer/customer: Acme NV
+    - Gross: EUR 1,210.00
+    - Net: EUR 1,000.00
+    - VAT: EUR 210.00
+    - Account: 704 Services revenue
+
+Journal:
+
+        Dr 400 Trade receivables/Customers  EUR 1,210.00
+        Cr 704 Services revenue             EUR 1,000.00
+        Cr 451 VAT payable/output VAT       EUR 210.00
+
+Compliance:
+
+    This is an outbound invoice. UBL/Peppol applies.
+
+    If CREATE_REAL_UBL=false:
+
+        status = demo_staged
+
+    If CREATE_REAL_UBL=true and required fields are present:
+
+        status = sent, or error if the external API fails
+
+
+Scenario 4: Client payment
+--------------------------
+
+Message:
+
+    "Client paid invoice INV-001 by bank transfer"
+
+Expected interpretation:
+
+    - Intent: PAYMENT_RECEIVED
+    - Direction: PAYMENT
+    - Document type: PAYMENT
+    - UBL/Peppol does not apply.
+
+Journal:
+
+        Dr 550 Bank                         amount
+        Cr 400 Trade receivables/Customers  amount
+
+Compliance status:
+
+    not_applicable
+
+Important product distinction:
+
+    A payment is not a UBL invoice. The compliance layer must say that clearly.
+    It must not say "skipped" as if something failed or was omitted.
+
+
+Scenario 5: Supplier payment without VAT
+----------------------------------------
+
+Message:
+
+    "I paid invoice INV-123 by bank transfer"
+
+Expected interpretation:
+
+    - Intent: PAYMENT_MADE
+    - Direction: PAYMENT
+    - Document type: PAYMENT
+    - UBL/Peppol does not apply.
+
+Journal:
+
+        Dr 440 Trade payables/Suppliers     amount
+        Cr 550 Bank                         amount
+
+Compliance:
+
+    not_applicable
+
+
+Scenario 6: Credit note
+-----------------------
+
+Message:
+
+    "Issue a credit note to Acme NV for EUR 121 incl. 21% VAT"
+
+Expected interpretation:
+
+    - Intent: OUTBOUND_CREDIT_NOTE
+    - Direction: OUTBOUND
+    - Document type: CREDIT_NOTE
+    - Seller/vendor: DemoCo BV
+    - Buyer/customer: Acme NV
+    - Gross: EUR 121.00
+    - Net: EUR 100.00
+    - VAT: EUR 21.00
+
+Journal:
+
+        Dr 704 Services revenue             EUR 100.00
+        Dr 451 VAT payable/output VAT       EUR 21.00
+        Cr 400 Trade receivables/Customers  EUR 121.00
+
+Compliance:
+
+    UBL/Peppol applies to credit notes too.
+
+    In demo mode:
+
+        demo_staged
+
+
+5. APPLICATION ARCHITECTURE
+===========================
+
+Main files:
+
+    main.py
+        FastAPI app, routes, chat processing pipeline, reply generation.
+
+    extract.py
+        Natural language extraction, fallback regex extraction, normalization,
+        VAT rate canonicalization, VAT amount calculation.
+
+    bookkeeping.py
+        Money handling, journal models, invoice-to-journal conversion, ledger,
+        trial balance, balance sheet summary, P&L summary.
+
+    chart_of_accounts.py
+        Belgian PCMN-style account list, account allocation, canonical account
+        metadata layer.
+
+    compliance.py
+        Generic UBL/Peppol compliance decision engine, payload builder, real
+        e-invoice.be HTTP client, response parser, and duplicate-send guard.
+
+    pdf_extract.py
+        Real PDF invoice extraction. Uses PyMuPDF for embedded text extraction
+        and Gemini PDF extraction when text is weak/empty and GOOGLE_API_KEY is
+        available.
+
+    static/index.html
+        Single-page frontend UI.
+
+    demo_scenarios.py
+        Built-in demo buttons.
+
+    tests/
+        Regression tests for extraction, VAT, bookkeeping, API behavior,
+        compliance statuses, and account classification.
+
+
+Runtime stack:
+
+    - Python
+    - FastAPI
+    - Uvicorn
+    - Vanilla HTML/CSS/JavaScript frontend
+    - python-dotenv for environment config
+    - optional google-genai for LLM extraction
+    - optional e-invoice-api for real e-invoice.be document creation
+    - pytest for tests
+
+
+6. REQUEST/RESPONSE FLOW
+========================
+
+The central route is:
+
+    POST /chat
+
+The frontend sends:
+
+    {
+      "message": "I paid the plumber EUR 242 incl. 21% VAT"
+    }
+
+main.py receives the message and calls _process_message().
+
+Pipeline inside _process_message():
+
+    1. extracted = llm_extract(message)
+    2. invoice = normalize_invoice(extracted)
+    3. invoice = _override_paid_supplier_invoice(message, invoice, extracted)
+    4. allocation = allocate_account(invoice)
+    5. compliance = build_compliance_result(invoice, MY_COMPANY, allocation, create_real_ubl_enabled())
+    6. entries = invoice_to_journal_entries(invoice, allocation)
+    7. post entries to LEDGER
+    8. ledger = LEDGER.snapshot()
+    9. return JSON response
+
+Response includes:
+
+    - reply
+    - intent
+    - invoice
+    - allocation
+    - compliance
+    - journal
+    - journal_entries
+    - ledger
+    - warnings
+
+
+7. EXTRACTION LAYER
+===================
+
+Extraction lives in extract.py.
+
+There are two extraction paths:
+
+    1. llm_extract(message)
+    2. naive_extract(message)
+
+llm_extract()
+-------------
+
+If GOOGLE_API_KEY is set, the app can call Gemini via google-genai to extract
+semantic fields:
+
+    - intent
+    - counterparty_name
+    - description
+    - gross
+    - tax_rate
+    - invoice_id
+
+Important design decision:
+
+    The LLM is instructed not to calculate VAT.
+
+The reason:
+
+    VAT, totals, and postings must be deterministic. The LLM can help understand
+    language, but it must not be trusted with accounting math.
+
+If the LLM fails or no key is configured:
+
+    llm_extract() falls back to naive_extract().
+
+
+naive_extract()
+---------------
+
+naive_extract() is a deterministic regex/keyword fallback. It identifies:
+
+    - INBOUND_INVOICE
+    - OUTBOUND_INVOICE
+    - PAYMENT_MADE
+    - PAYMENT_RECEIVED
+    - OUTBOUND_CREDIT_NOTE
+    - INBOUND_CREDIT_NOTE
+    - UNKNOWN
+
+Examples:
+
+    "I paid the plumber EUR 242 incl. 21% VAT"
+        -> INBOUND_INVOICE because "paid" plus VAT/invoice clues means a paid
+           supplier invoice, not merely a bank payment.
+
+    "I paid invoice INV-123 by bank transfer"
+        -> PAYMENT_MADE because it has payment wording but no VAT/invoice
+           purchase evidence.
+
+    "Client paid invoice INV-001 by bank transfer"
+        -> PAYMENT_RECEIVED
+
+    "Issue a credit note to Acme NV..."
+        -> OUTBOUND_CREDIT_NOTE
+
+
+8. VAT NORMALIZATION AND CALCULATION
+====================================
+
+VAT logic is in extract.py.
+
+The app canonicalizes VAT rates internally as decimal fractions:
+
+    21%  -> Decimal("0.21")
+    21   -> Decimal("0.21")
+    0.21 -> Decimal("0.21")
+    6    -> Decimal("0.06")
+
+This is handled by:
+
+    canonicalize_vat_rate(value)
+
+Why this matters:
+
+    Before the fix, a rate like 21 could be treated inconsistently and divided
+    by 100 twice. That produced absurd values like EUR 0.51 VAT on a EUR 242
+    invoice.
+
+
+VAT-inclusive formula
+---------------------
+
+For gross amounts that include VAT:
+
+    vat_amount = gross_amount * vat_rate / (1 + vat_rate)
+    net_amount = gross_amount - vat_amount
+
+Example:
+
+    Gross = 242.00
+    Rate = 0.21
+
+    VAT = 242 * 0.21 / 1.21 = 42.00
+    Net = 242 - 42 = 200.00
+
+
+VAT-exclusive formula
+---------------------
+
+For net amounts that exclude VAT:
+
+    vat_amount = net_amount * vat_rate
+    gross_amount = net_amount + vat_amount
+
+Example:
+
+    Net = 100.00
+    Rate = 0.21
+
+    VAT = 21.00
+    Gross = 121.00
+
+
+Money handling
+--------------
+
+The app uses Decimal, not float.
+
+Money is rounded to 2 decimals using ROUND_HALF_UP in bookkeeping.money().
+
+This avoids binary floating-point surprises and gives accounting-style rounding.
+
+
+9. NORMALIZED INVOICE MODEL
+===========================
+
+normalize_invoice() converts extracted data into a structured invoice/payment
+object.
+
+Key fields:
+
+    - intent
+    - direction
+    - document_type
+    - state
+    - invoice_id
+    - invoice_date
+    - due_date
+    - currency
+    - tax_code
+    - tax_rate
+    - description
+    - counterparty_name
+    - items
+    - subtotal
+    - total_tax
+    - invoice_total
+    - amount_due
+    - extraction_source
+    - payment_included
+    - vat_evidence
+    - vendor_name
+    - vendor_tax_id
+    - vendor_address
+    - customer_name
+    - customer_tax_id
+    - customer_address
+
+Direction handling:
+
+    INBOUND
+        Supplier/vendor is the counterparty.
+        DemoCo is the customer/buyer.
+
+    OUTBOUND
+        DemoCo is the vendor/seller.
+        Counterparty is the customer/buyer.
+
+    PAYMENT
+        Used for pure bank settlements.
+
+Document type handling:
+
+    INVOICE
+        Sales invoices and supplier invoices.
+
+    CREDIT_NOTE
+        Outbound or inbound credit notes.
+
+    PAYMENT
+        Bank payments. UBL/Peppol not applicable.
+
+
+10. PAID SUPPLIER INVOICE OVERRIDE
+==================================
+
+There is a special guard in main.py:
+
+    _override_paid_supplier_invoice()
+
+Purpose:
+
+    If an LLM or extractor classifies "I paid the plumber EUR 242 incl. 21% VAT"
+    as a payment, the system can reclassify it as an inbound supplier invoice
+    with payment included.
+
+Why:
+
+    In accounting, a message that includes supplier context, VAT evidence, and a
+    gross amount usually means an expense invoice that was paid, not just an
+    abstract bank movement.
+
+The override:
+
+    - changes intent to INBOUND_INVOICE
+    - sets direction to INBOUND
+    - sets document_type to INVOICE
+    - recomputes VAT using the shared deterministic calculator
+    - sets payment_included = True
+
+Then invoice_to_journal_entries() creates two entries:
+
+    1. invoice recognition
+    2. payment clearing
+
+
+11. BELGIAN PCMN-STYLE ACCOUNT ALLOCATION
+=========================================
+
+Account allocation lives in chart_of_accounts.py.
+
+The app has a Belgian PCMN-style chart subset:
+
+    400 Trade receivables / Customers
+    411 VAT recoverable / input VAT
+    440 Trade payables / Suppliers
+    451 VAT payable / output VAT
+    550 Bank
+    604 Purchases of goods for resale
+    610 Rent and rental charges
+    611 Maintenance and repairs
+    612 Utilities / energy / telecom
+    613 Insurance
+    614 Transport and travel
+    615 Professional fees and external services
+    616 Office/admin expenses
+    620 Remuneration and payroll costs
+    630 Depreciation
+    640 Taxes and operating charges
+    657 Bank/payment fees
+    700 Sales revenue
+    704 Services revenue
+    740 Operating subsidies / other operating income
+
+
+Allocation logic
+----------------
+
+allocate_account(invoice) looks at:
+
+    - invoice description
+    - counterparty name
+    - vendor/customer names
+    - line item descriptions
+
+It then matches keywords.
+
+Examples:
+
+    plumber, repair, maintenance, plumbing
+        -> 611 Maintenance and repairs
+
+    Proximus, telecom, internet, phone
+        -> 612 Utilities / energy / telecom
+
+    website, consulting, design, service
+        -> 704 Services revenue
+
+Pure payments:
+
+    PAYMENT_MADE
+        -> 440 Trade payables / Suppliers
+
+    PAYMENT_RECEIVED
+        -> 400 Trade receivables / Customers
+
+
+12. CANONICAL PCMN ACCOUNT METADATA
+===================================
+
+The app now has a central account metadata layer:
+
+    PCMN_ACCOUNT_META
+    get_account_meta(account_code)
+
+Each account meta includes:
+
+    - code
+    - name
+    - class_code
+    - category
+    - statement
+    - normal_side
+    - liquidity_group
+    - working_capital_group
+    - display_group
+    - flagged
+
+Categories:
+
+    - asset
+    - liability
+    - equity
+    - expense
+    - revenue
+    - contra_asset
+    - mixed
+    - unknown
+
+Statements:
+
+    - balance_sheet
+    - income_statement
+
+Normal side:
+
+    - debit
+    - credit
+
+
+Baseline classification
+-----------------------
+
+1xx:
+
+    Balance sheet. Usually equity/provisions/long-term liabilities.
+
+    10-15:
+        equity, normal credit
+
+    16:
+        provisions/liability, normal credit
+
+    17:
+        long-term debt/liability, normal credit
+
+2xx:
+
+    Fixed assets and long-term receivables.
+    Asset, balance sheet, normal debit.
+
+3xx:
+
+    Inventories and work/orders in progress.
+    Asset, balance sheet, normal debit.
+
+4xx:
+
+    Mixed class. Must be classified by subrange.
+
+    400:
+        trade receivables, asset, debit
+
+    411:
+        VAT recoverable, asset, debit
+
+    440:
+        trade payables, liability, credit
+
+    451:
+        VAT payable, liability, credit
+
+    490/491:
+        debit-nature accrual/prepayment accounts, asset
+
+    492/493:
+        credit-nature accrual/deferred income accounts, liability
+
+    Unknown 4xx:
+        mixed, flagged
+
+5xx:
+
+    Cash, bank, liquid assets.
+    Asset, normal debit.
+
+    550 Bank:
+        asset.
+        A credit balance displays as negative cash / overdraft-like effect in
+        the balance sheet summary, but the trial balance is not mutated.
+
+6xx:
+
+    Expenses.
+    Income statement, normal debit.
+
+7xx:
+
+    Revenue/income.
+    Income statement, normal credit.
+
+
+Why this matters:
+
+    A trial balance can be mathematically balanced while still being useless for
+    financial reporting if accounts are not classified. The metadata layer turns
+    raw debit/credit rows into:
+
+        - balance sheet
+        - P&L
+        - VAT position
+        - cash movement
+        - open receivables
+        - open payables
+        - grouped trial balance
+
+
+13. DOUBLE-ENTRY BOOKKEEPING ENGINE
+===================================
+
+Bookkeeping lives in bookkeeping.py.
+
+Core classes:
+
+    JournalLine
+        account
+        account_name
+        debit
+        credit
+
+    JournalEntry
+        ref
+        date
+        intent
+        narrative
+        lines
+
+    Ledger
+        in-memory list of posted journal entries
+
+
+Journal validation
+------------------
+
+Every journal entry has:
+
+    total_debit
+    total_credit
+    balanced
+
+Ledger.post(entry) refuses to post an unbalanced entry.
+
+That means the app cannot silently corrupt the ledger with an entry where:
+
+    debits != credits
+
+
+Invoice to journal mapping
+--------------------------
+
+Inbound invoice:
+
+    Dr expense account
+    Dr 411 VAT recoverable/input VAT
+    Cr 440 Trade payables/Suppliers
+
+Outbound invoice:
+
+    Dr 400 Trade receivables/Customers
+    Cr revenue account
+    Cr 451 VAT payable/output VAT
+
+Supplier payment:
+
+    Dr 440 Trade payables/Suppliers
+    Cr 550 Bank
+
+Customer payment:
+
+    Dr 550 Bank
+    Cr 400 Trade receivables/Customers
+
+Outbound credit note:
+
+    Dr revenue account
+    Dr 451 VAT payable/output VAT
+    Cr 400 Trade receivables/Customers
+
+Inbound credit note:
+
+    Dr 440 Trade payables/Suppliers
+    Cr expense account
+    Cr 411 VAT recoverable/input VAT
+
+
+14. TRIAL BALANCE
+=================
+
+The trial balance preserves classic accounting columns:
+
+    - Account
+    - Debit total
+    - Credit total
+    - Ending balance
+
+Ending balance is computed as:
+
+    debit - credit
+
+Examples:
+
+    Asset with debit balance:
+
+        411 VAT recoverable:
+            debit 42
+            credit 0
+            balance 42
+
+    Liability fully cleared:
+
+        440 Trade payables:
+            debit 242
+            credit 242
+            balance 0
+
+    Bank with credit movement:
+
+        550 Bank:
+            debit 0
+            credit 242
+            balance -242
+
+The app does not mutate trial-balance math for display. A credit balance in bank
+remains a credit balance. Higher-level summaries interpret it as negative cash.
+
+
+Grouped trial balance
+---------------------
+
+The frontend groups trial balance rows by metadata display group:
+
+    - Assets
+    - Liabilities
+    - Equity
+    - Expenses
+    - Revenue
+    - Mixed/Unclassified
+
+This makes the ledger easier to inspect without removing the classic debit and
+credit columns.
+
+
+15. BALANCE SHEET SUMMARY
+=========================
+
+The balance sheet summary is derived from metadata:
+
+    Assets:
+        balance sheet accounts with asset or contra_asset category
+
+    Liabilities:
+        balance sheet accounts with liability category
+
+    Equity:
+        balance sheet accounts with equity category
+
+    Mixed/unclassified:
+        unknown or ambiguous accounts
+
+Important:
+
+    6xx and 7xx accounts are not directly included in balance sheet totals.
+    They belong to the income statement. Retained earnings/result could be added
+    later as a separate closing process, but this prototype keeps the distinction
+    explicit.
+
+
+Plumber case balance sheet effect
+---------------------------------
+
+After:
+
+    "I paid the plumber EUR 242 incl. 21% VAT"
+
+Trial balance:
+
+    411 VAT recoverable:
+        +42 asset
+
+    550 Bank:
+        -242 asset
+
+    440 Payable:
+        0 liability after clearing
+
+Balance sheet summary:
+
+    Assets:
+        VAT recoverable 42
+        Bank -242
+        Total assets effect -200
+
+    Liabilities:
+        Trade payables 0
+
+Net assets effect:
+
+    -200
+
+That corresponds to the expense reducing the company's net position.
+
+
+16. PROFIT AND LOSS SUMMARY
+===========================
+
+P&L summary is derived from income statement account metadata.
+
+Expenses:
+
+    6xx debit balances
+
+Revenue:
+
+    7xx credit balances
+
+Profit/loss:
+
+    revenue - expenses
+
+
+Plumber case P&L
+----------------
+
+    Expense:
+        611 Maintenance and repairs = 200
+
+    Revenue:
+        0
+
+    Profit/loss:
+        -200
+
+
+Client invoice P&L
+------------------
+
+For:
+
+    "Invoice Acme NV EUR 1,210 incl. 21% VAT for website services"
+
+P&L:
+
+    Revenue:
+        704 Services revenue = 1,000
+
+    Expense:
+        0
+
+    Profit/loss:
+        +1,000
+
+VAT is not revenue. Receivables are not revenue. The app separates those through
+the journal and metadata.
+
+
+17. VAT, CASH, AP, AR VIEWS
+===========================
+
+The VAT/Cash/AP/AR tab is derived from ledger balances:
+
+VAT recoverable:
+
+    Account 411 debit balance.
+
+VAT payable:
+
+    Account 451 credit balance.
+
+Net VAT payable:
+
+    VAT payable - VAT recoverable
+
+Interpretation:
+
+    Positive:
+        net payable to tax authority
+
+    Negative:
+        net recoverable from tax authority
+
+Cash movement:
+
+    55x cash/bank accounts, especially 550 Bank.
+
+Open payables:
+
+    440 credit balance minus debit settlements.
+
+Open receivables:
+
+    400 debit balance minus credit settlements.
+
+
+18. UBL/PEPPOL COMPLIANCE ENGINE
+================================
+
+Compliance lives in compliance.py.
+
+The central function is:
+
+    build_compliance_result(invoice, company, allocation, create_real_ubl)
+
+It returns a structured compliance decision object.
+
+Fields:
+
+    - applicability
+    - reason
+    - mode
+    - peppol_action
+    - status
+    - direction
+    - document_type
+    - payload_preview
+    - missing_fields
+    - validation_messages
+    - transmission_attempted
+    - external_doc_id
+    - api_error
+    - api_status_code
+    - api_response
+    - create_real_ubl
+    - ubl_available
+    - doc_id
+    - evidence
+    - validation
+
+
+Applicability values:
+
+    applicable
+    not_applicable
+
+Peppol action values:
+
+    sendable
+    inbound_evidence_only
+    not_applicable_payment
+    blocked_missing_data
+
+Mode values:
+
+    demo
+    real
+    blocked
+    not_applicable
+
+Status values:
+
+    demo_staged
+    sent
+    sent_pending_id
+    already_sent
+    inbound_staged
+    blocked_missing_api_key
+    blocked_missing_master_data
+    not_applicable
+    error
+
+
+Business rules
+--------------
+
+UBL/Peppol applies to:
+
+    - INVOICE
+    - CREDIT_NOTE
+
+UBL/Peppol does not apply to:
+
+    - pure PAYMENT_MADE
+    - pure PAYMENT_RECEIVED
+
+Outbound invoice:
+
+    DemoCo is seller/supplier.
+
+    If CREATE_REAL_UBL=false:
+        payload is staged
+        status = demo_staged
+
+    If CREATE_REAL_UBL=true and required fields are present:
+        the app sends the payload with:
+
+            POST {base_url}/api/documents/
+            Authorization: Bearer {E_INVOICE_API_KEY}
+            Content-Type: application/json
+
+        status = sent if e-invoice.be returns a successful response with an
+        external document ID.
+
+        status = sent_pending_id if e-invoice.be accepts the request but does
+        not return an external document ID.
+
+        status = error if the API request fails.
+
+    If CREATE_REAL_UBL=true and the API key is missing:
+        status = blocked_missing_api_key
+
+    If required fields are missing:
+        payload is staged
+        status = blocked_missing_master_data
+
+Inbound supplier invoice:
+
+    DemoCo is buyer/customer.
+    The app must not send a Peppol invoice as DemoCo because DemoCo is not the
+    supplier.
+
+    It builds inbound evidence and sets:
+
+        status = inbound_staged
+        peppol_action = inbound_evidence_only
+
+Payments:
+
+    UBL not applicable:
+
+        status = not_applicable
+        peppol_action = not_applicable_payment
+        payload_preview = null
+
+
+Real e-invoice.be client
+------------------------
+
+Real sending is implemented in:
+
+    send_einvoice_document(payload)
+
+It:
+
+    - reads E_INVOICE_API_KEY or EINVOICE_API_KEY
+    - reads E_INVOICE_BASE_URL or EINVOICE_BASE_URL
+    - defaults base URL to https://api.e-invoice.be
+    - POSTs JSON to /api/documents/
+    - uses Bearer authentication
+    - uses a 15 second timeout
+    - ignores ambient HTTP_PROXY/HTTPS_PROXY environment variables so local
+      broken proxy settings cannot hijack the API call
+    - retries once with TLS verification disabled if Python cannot validate the
+      e-invoice.be certificate chain in the local environment, and exposes that
+      fact as tls_verify_disabled in the compliance result
+    - returns a normalized result:
+
+        ok
+        status_code
+        response
+        external_doc_id
+        error
+
+External document ID extraction supports common API response shapes:
+
+    - response["id"]
+    - response["document_id"]
+    - response["uuid"]
+    - response["external_doc_id"]
+    - response["data"]["id"]
+    - response["data"]["document_id"]
+
+Duplicate-send protection:
+
+    Successful sends are tracked in memory by invoice_id. If the same invoice_id
+    is processed again in the same server session, the compliance result returns:
+
+        status = already_sent
+        transmission_attempted = false
+
+    This prevents accidental repeated Peppol transmissions during demos.
+
+Real-send debugging result:
+
+    A real outbound Acme invoice was successfully accepted by e-invoice.be:
+
+        HTTP status: 201
+        status: sent
+        external_doc_id: doc-cb267w8yit40rfkcisi3qooawdr2gas2
+
+    The earlier failure had two concrete causes:
+
+        1. Python/httpx inherited proxy variables pointing to 127.0.0.1:9.
+        2. The old Acme demo VAT ID failed Belgian checksum validation.
+
+    The default Acme VAT ID is now BE0987654394.
+
+Sandbox recipient routing:
+
+    For hackathon sandbox sends, the visible demo customer remains "Acme NV",
+    but the outbound Peppol payload is enriched with the configured sandbox
+    receiver:
+
+        customer_name: Acme NV
+        customer_tax_id: BE0999970129
+        customer_address: Wetstraat 1, 1000 Brussels
+        customer_peppol_id: 0208:0999970129
+
+    This is controlled by DEMO_CUSTOMER_NAME, DEMO_CUSTOMER_VAT_ID,
+    DEMO_CUSTOMER_ADDRESS, and DEMO_CUSTOMER_PEPPOL_ID, with the above defaults.
+
+    The verified sandbox flow now creates the document and then calls:
+
+        POST /api/documents/{document_id}/send
+
+    A real Acme send returned:
+
+        status: sent
+        API send state: TRANSIT
+        external_doc_id: doc-xvsr2bcyblb77f3w2nibcltvh0hw5aaa
+
+
+Payload preview
+---------------
+
+The payload preview is built from normalized invoice data, not hardcoded demo
+values.
+
+Shape:
+
+    {
+      "document_type": "INVOICE" or "CREDIT_NOTE",
+      "invoice_id": "...",
+      "invoice_date": "...",
+      "due_date": "...",
+      "currency": "EUR",
+      "vendor_name": "...",
+      "vendor_tax_id": "...",
+      "vendor_address": "...",
+      "vendor_peppol_id": "...",
+      "customer_name": "...",
+      "customer_tax_id": "...",
+      "customer_address": "...",
+      "customer_peppol_id": "...",
+      "items": [
+        {
+          "description": "...",
+          "quantity": 1,
+          "unit_price": "...",
+          "tax_rate": "21.00",
+          "account_code": "611",
+          "account_name": "Maintenance and repairs"
+        }
+      ],
+      "tax_exclusive_total": "...",
+      "tax_total": "...",
+      "tax_inclusive_total": "...",
+      "payable_amount": "...",
+      "tax_breakdown": [
+        {
+          "tax_rate": "21.00",
+          "taxable_amount": "...",
+          "tax_amount": "..."
+        }
+      ],
+      "payment_means": {
+        "iban": "...",
+        "payment_reference": "..."
+      }
+    }
+
+
+Required outbound fields
+------------------------
+
+For outbound real transmission, the compliance engine validates:
+
+    - document_type
+    - invoice_id
+    - invoice_date
+    - currency
+    - vendor/seller legal name
+    - vendor/seller VAT ID
+    - vendor/seller address
+    - customer/buyer legal name
+    - customer/buyer VAT ID or Peppol participant ID when applicable
+    - customer/buyer address
+    - at least one invoice line
+    - line description/name
+    - line quantity
+    - line net unit price
+    - VAT category/rate
+    - tax totals
+    - legal monetary totals
+    - payable amount
+
+For inbound staging:
+
+    Missing supplier fields do not block accounting.
+    They are listed in missing_fields for audit/master-data follow-up.
+
+
+19. PDF INVOICE EXTRACTION
+==========================
+
+PDF extraction lives in pdf_extract.py.
+
+The central functions are:
+
+    extract_pdf_text(file_path)
+    extract_pdf_invoice_message(file_path)
+
+Return shape:
+
+    ok
+    method
+    text
+    pages
+    confidence
+    warnings
+    error
+    message
+
+Text-based PDF path:
+
+    1. Open the PDF with PyMuPDF.
+    2. Extract text from each page.
+    3. Normalize whitespace.
+    4. Require meaningful text before accepting extraction.
+    5. Score confidence from invoice signals such as invoice, VAT/TVA/BTW,
+       total, amount due, due date, supplier, customer, EUR, IBAN, and tax rate.
+    6. Convert the extracted text into a clean invoice sentence when possible.
+    7. Pass that message into the normal chat pipeline.
+
+Scanned PDF path:
+
+    If embedded text is weak/empty and GOOGLE_API_KEY is configured, the app
+    attempts Gemini PDF extraction. Gemini is asked to extract invoice facts and
+    readable text only. It is not allowed to decide accounting, VAT math, or
+    journal entries.
+
+Failure behavior:
+
+    If PDF extraction fails, the API returns:
+
+        "I could not extract invoice data from this PDF. Please upload a
+        text-based invoice PDF or type the invoice details."
+
+    No fake invoice is created. No default amount is invented. No journal is
+    posted. The response includes pdf_extraction metadata with method, confidence,
+    warnings, error, and text preview when available.
+
+
+20. FRONTEND
+============
+
+The frontend is a single static HTML file:
+
+    static/index.html
+
+It uses:
+
+    - vanilla JavaScript
+    - CSS
+    - fetch()
+    - no build step
+
+Main sections:
+
+    Header:
+        Brand, tenant/company pill, books balanced pill, reset button.
+
+    Chat panel:
+        Scenario buttons, messages, text input, PDF upload button.
+
+    Proof panel:
+        Tabs for compliance, journal, trial balance, summary, allocation.
+
+
+Compliance Proof tab
+--------------------
+
+Shows:
+
+    - CREATE_REAL_UBL mode
+    - company
+    - applicability
+    - status
+    - mode
+    - direction
+    - document type
+    - external doc ID
+    - API status code
+    - API error
+    - API response preview when available
+    - validation messages
+    - missing fields
+    - evidence timeline
+    - payload preview
+    - PDF extraction method/confidence/pages/text preview when the source is a PDF
+    - raw debug JSON
+
+
+Journal tab
+-----------
+
+Shows each journal entry:
+
+    - narrative
+    - balanced status
+    - account
+    - debit
+    - credit
+    - entry totals
+
+
+Trial Balance tab
+-----------------
+
+Shows:
+
+    - Assets card
+    - Liabilities card
+    - Equity card
+    - Expenses card
+    - Revenue card
+    - Profit/Loss card
+    - grouped sections:
+        - Assets
+        - Liabilities
+        - Equity
+        - Expenses
+        - Revenue
+        - Mixed/Unclassified
+    - classic trial balance totals
+
+It keeps debit/credit columns.
+
+
+VAT/Cash/AP/AR tab
+------------------
+
+Shows:
+
+    - VAT recoverable
+    - VAT payable
+    - net VAT payable
+    - cash movement
+    - open payables
+    - open receivables
+    - net assets effect
+    - profit/loss
+    - accounts touched
+    - entries posted
+    - latest entry
+
+
+Allocation tab
+--------------
+
+Shows:
+
+    - latest allocated account
+    - confidence
+    - matched keywords
+    - explanation
+    - PCMN-style chart preview
+
+
+21. API ENDPOINTS
+=================
+
+GET /
+
+    Serves static/index.html.
+
+
+GET /health
+
+Returns:
+
+    - status
+    - app
+    - create_real_ubl
+    - mode
+    - tenant
+
+
+POST /chat
+
+Body:
+
+    {
+      "message": "..."
+    }
+
+Returns processed transaction, journal, compliance, ledger, and reply.
+
+
+POST /chat/pdf
+
+Accepts a PDF upload.
+
+Current behavior:
+
+    Real extraction. It reads the file bytes, stores a temp file, calls
+    extract_pdf_invoice_message(), extracts embedded PDF text with PyMuPDF, and
+    routes the extracted invoice text through the same chat/accounting/compliance
+    pipeline.
+
+Response metadata:
+
+    pdf_extraction:
+        ok
+        method
+        confidence
+        pages
+        text_preview
+        warnings
+        error
+
+Extraction methods:
+
+    pdf_text
+        Embedded text extracted directly from the PDF with PyMuPDF.
+
+    gemini_pdf
+        Gemini-based extraction attempted when embedded text is weak/empty and
+        GOOGLE_API_KEY is configured.
+
+    failed
+        No reliable invoice text could be extracted.
+
+Product implication:
+
+    Text-based PDF extraction is implemented. Scanned/image-only PDF extraction
+    requires GOOGLE_API_KEY for Gemini PDF/vision extraction. If extraction
+    fails, the app fails honestly and does not create a fake invoice. The app
+    also refuses to post a PDF-derived invoice if it cannot identify a usable
+    invoice amount.
+
+
+GET /ledger
+
+Returns current in-memory ledger snapshot.
+
+
+POST /reset
+
+Clears the in-memory ledger and resets invoice counter.
+
+
+GET /chart-of-accounts
+
+Returns:
+
+    - PCMN-style chart accounts
+    - metadata
+    - allocation rules
+
+
+GET /demo/scenarios
+
+Returns scenario button definitions.
+
+
+22. DATA LIFETIME AND LIMITATIONS
+=================================
+
+Current ledger storage:
+
+    In-memory Python object.
+
+Implication:
+
+    Data resets when the server restarts.
+
+Reset button:
+
+    Calls POST /reset and clears the in-memory ledger.
+
+Production implication:
+
+    A real version needs durable storage:
+
+        - PostgreSQL
+        - tenant/company tables
+        - invoices
+        - journal entries
+        - accounts
+        - audit logs
+        - compliance payloads
+        - Peppol transmission logs
+
+
+23. ENVIRONMENT VARIABLES
+=========================
+
+CREATE_REAL_UBL
+
+    "1" means attempt real e-invoice.be API for eligible outbound documents.
+    Any other value means demo/staged mode.
+
+GOOGLE_API_KEY
+
+    Enables Gemini extraction through google-genai.
+    Without it, regex extraction is used.
+
+GEMINI_MODEL
+
+    Optional model name.
+    Default: gemini-2.5-flash
+
+E_INVOICE_API_KEY or EINVOICE_API_KEY
+
+    Used by e-invoice.be API client.
+
+E_INVOICE_TENANT_ID or EINVOICE_TENANT_ID
+
+    Tenant identifier.
+
+E_INVOICE_BASE_URL or EINVOICE_BASE_URL
+
+    API base URL.
+    Default for real send path: https://api.e-invoice.be
+
+E_INVOICE_COMPANY_NAME or COMPANY_NAME
+
+    Company name for tenant info.
+
+E_INVOICE_COMPANY_VAT_ID or COMPANY_VAT_ID
+
+    Seller/company VAT ID used in real outbound e-invoice payloads.
+
+E_INVOICE_COMPANY_ADDRESS or COMPANY_ADDRESS
+
+    Seller/company legal address used in real outbound e-invoice payloads.
+
+E_INVOICE_PEPPOL_ID or PEPPOL_ID
+
+    Peppol participant ID.
+
+E_INVOICE_IBAN or COMPANY_IBAN
+
+    IBAN used in payment means.
+
+
+24. TEST COVERAGE
+=================
+
+The test suite covers:
+
+    - API health
+    - plumber paid supplier invoice
+    - Proximus supplier invoice
+    - outbound sales invoice
+    - client payment
+    - supplier payment
+    - credit note
+    - VAT inclusive calculations
+    - VAT exclusive calculations
+    - VAT rate canonicalization behavior through normalized outputs
+    - supplier payment override
+    - account allocation
+    - balanced journal posting
+    - ledger rejection of unbalanced entries
+    - PCMN account metadata classification
+    - balance sheet and P&L summaries
+    - UBL/Peppol compliance statuses
+    - real e-invoice.be send result handling with mocked success/failure
+    - blocked real send when API key or master data is missing
+    - duplicate Peppol transmission prevention
+    - external document ID parsing from common API response shapes
+    - text-based PDF invoice upload extraction
+    - honest PDF extraction failure with no fake invoice
+
+Command:
+
+    $env:PYTHONPATH='.'; pytest -q
+
+Current verified result:
+
+    38 passed
+
+
+25. WHY THIS IS MORE THAN A DEMO
+================================
+
+The system demonstrates several production-grade principles:
+
+    1. Natural language is only the input layer.
+    2. Accounting math is deterministic.
+    3. VAT is calculated with Decimal.
+    4. VAT rate normalization is centralized.
+    5. Journal entries are balanced before posting.
+    6. Account classification is metadata-driven.
+    7. UBL/Peppol applicability is type-aware.
+    8. Inbound and outbound documents are treated differently.
+    9. Payments are correctly marked as not applicable for UBL.
+    10. The UI shows proof, not just a success message.
+
+
+26. LANDING PAGE POSITIONING
+============================
+
+Core headline options:
+
+    "E-invoicing that feels like chat. Accounting proof built in."
+
+    "From one sentence to Peppol-ready invoices and balanced books."
+
+    "WhatsApp-simple invoicing. Accountant-grade output."
+
+    "Turn plain-language business events into VAT, UBL, and journal proof."
+
+
+Subheadline options:
+
+    "InvoiceAgent converts normal business messages into structured invoices,
+    deterministic VAT, Belgian PCMN account allocation, balanced double-entry
+    journals, and UBL/Peppol compliance evidence."
+
+    "Built for SMEs that need e-invoicing compliance without accounting software
+    complexity."
+
+    "The LLM understands the sentence. Deterministic Python handles the money."
+
+
+One-liner:
+
+    "InvoiceAgent is a chat-first e-invoicing and accounting automation layer for
+    Belgian SMEs."
+
+
+Short pitch:
+
+    "InvoiceAgent lets a business owner type a normal sentence like 'I paid the
+    plumber EUR 242 incl. VAT' and instantly produces VAT calculations, Belgian
+    account allocation, double-entry journals, trial balance proof, and
+    UBL/Peppol compliance evidence."
+
+
+Long pitch:
+
+    "E-invoicing is becoming mandatory, but most small businesses do not want to
+    operate complex accounting software. InvoiceAgent gives them a chat-simple
+    interface while still generating the accounting and compliance proof that
+    accountants, auditors, and tax workflows require. It separates language
+    understanding from financial logic: the AI can parse the sentence, but VAT,
+    account mapping, journal entries, trial balance, balance sheet, P&L, and
+    UBL/Peppol applicability are deterministic."
+
+
+27. LANDING PAGE SECTION IDEAS
+==============================
+
+Hero
+----
+
+Headline:
+
+    "From a sentence to compliant e-invoicing and balanced books."
+
+Supporting copy:
+
+    "InvoiceAgent turns everyday business messages into VAT-correct invoices,
+    Belgian PCMN account allocation, double-entry journals, and UBL/Peppol proof."
+
+CTA:
+
+    "Try the live demo"
+    "See the accounting proof"
+
+
+Section: The Problem
+--------------------
+
+    - E-invoicing rules are getting stricter.
+    - SMEs still work through WhatsApp, email, PDF, and bank statements.
+    - Accountants need structured records.
+    - VAT mistakes are expensive.
+    - Existing accounting software is too heavy for quick capture.
+
+
+Section: How It Works
+---------------------
+
+Step 1:
+
+    Type or upload
+
+Step 2:
+
+    InvoiceAgent extracts intent, supplier/customer, amount, VAT, and document
+    type.
+
+Step 3:
+
+    Deterministic accounting engine computes VAT and posts double-entry journals.
+
+Step 4:
+
+    Compliance engine stages or sends the correct UBL/Peppol payload.
+
+Step 5:
+
+    The proof panel shows journal, trial balance, VAT, cash, AP, AR, and payload
+    evidence.
+
+
+Section: Demo Examples
+----------------------
+
+Example 1:
+
+    Input:
+        "I paid the plumber EUR 242 incl. 21% VAT"
+
+    Output:
+        Net EUR 200
+        VAT EUR 42
+        Gross EUR 242
+        Dr 611 / Dr 411 / Cr 440
+        Payment Dr 440 / Cr 550
+
+Example 2:
+
+    Input:
+        "Invoice Acme NV EUR 1,210 incl. 21% VAT for website services"
+
+    Output:
+        Dr 400
+        Cr 704
+        Cr 451
+        UBL-ready payload staged
+
+
+Section: Trust Layer
+--------------------
+
+    - Decimal VAT calculations
+    - Balanced double-entry only
+    - PCMN-style account classification
+    - UBL/Peppol applicability engine
+    - Payload preview and validation messages
+    - Clear missing master data
+    - Inbound invoices are not incorrectly transmitted as outbound Peppol
+      documents
+
+
+Section: Built For Belgium
+--------------------------
+
+    - Belgian PCMN-style chart
+    - VAT recoverable/payable accounts
+    - Belgian-style supplier/customer/payable/receivable flows
+    - Peppol/UBL readiness
+    - e-invoice.be integration path
+
+
+Section: Why It Is Different
+----------------------------
+
+    - Not just OCR.
+    - Not just chat.
+    - Not just invoice creation.
+    - Not a black-box LLM doing accounting math.
+    - It produces an explainable accounting trail.
+
+
+28. INVESTOR OR HACKATHON PITCH
+===============================
+
+Problem:
+
+    European e-invoicing mandates are forcing SMEs into more structured digital
+    workflows, but the current tools feel like accounting software, not business
+    conversation.
+
+Solution:
+
+    InvoiceAgent turns natural language and PDFs into compliant e-invoice data
+    and accountant-ready journals.
+
+Why now:
+
+    - E-invoicing mandates are accelerating.
+    - Peppol/UBL adoption is growing.
+    - LLMs make natural-language capture possible.
+    - SMEs need automation that does not compromise accounting correctness.
+
+Product:
+
+    A chat interface where every message produces proof:
+
+        - VAT calculation
+        - account allocation
+        - UBL/Peppol decision
+        - journal entries
+        - trial balance
+        - balance sheet/P&L impact
+
+Differentiator:
+
+    The LLM does not own the books. Deterministic accounting logic does.
+
+Demo flow:
+
+    1. Type plumber payment.
+    2. Show VAT EUR 42, not EUR 0.51.
+    3. Show invoice plus payment entries.
+    4. Show trial balance balanced.
+    5. Show balance sheet and P&L impact.
+    6. Show compliance status: inbound staged, no outbound Peppol transmission.
+    7. Type outbound Acme invoice.
+    8. Show UBL-ready payload staged.
+
+Business model possibilities:
+
+    - SaaS for SMEs
+    - accountant portal
+    - per-company subscription
+    - per-document e-invoice processing
+    - API for fintech/accounting platforms
+    - white-label for banks, accountants, invoice networks
+
+
+29. TECHNICAL DIFFERENTIATORS
+=============================
+
+1. Deterministic VAT engine
+
+    The VAT bug that treated 21% incorrectly has been fixed by canonicalizing
+    all rates to decimal fractions.
+
+2. Correct UBL applicability
+
+    Payments are not UBL invoices.
+    Inbound supplier invoices are not transmitted as if DemoCo were the seller.
+
+3. PCMN account metadata
+
+    Accounts are classified by Belgian-style account class and subrange, not
+    merely displayed as a flat list.
+
+4. Double-entry proof
+
+    Every posted entry must balance.
+
+5. Financial reporting model
+
+    The same ledger powers:
+
+        - Trial Balance
+        - Balance Sheet
+        - P&L
+        - VAT
+        - Cash
+        - AP
+        - AR
+
+6. Explainability
+
+    The UI shows what happened and why.
+
+7. Real Peppol send path with guardrails
+
+    Eligible outbound invoices and outbound credit notes can be sent through the
+    e-invoice.be HTTP API when CREATE_REAL_UBL=1 and required master data/API key
+    are present. The app does not claim sent unless the API accepts the document.
+    Duplicate invoice IDs are protected from repeated sends in memory.
+
+8. Honest PDF extraction
+
+    PDF upload extracts real embedded text with PyMuPDF and routes the result
+    through the same accounting/compliance pipeline as chat. If extraction fails,
+    no default invoice is fabricated.
+
+
+30. CURRENT LIMITATIONS
+=======================
+
+This is a prototype. Current limitations:
+
+    - Ledger is in-memory, not persisted.
+    - Text-based PDF upload is implemented with PyMuPDF; scanned PDFs require
+      GOOGLE_API_KEY for Gemini PDF/vision extraction.
+    - Account allocation is keyword-based, not a trained classifier.
+    - The PCMN chart is a useful subset, not the full Belgian chart.
+    - Multi-line invoice extraction is structurally supported in compliance
+      payloads but natural-language extraction currently creates one line.
+    - Real e-invoice.be HTTP sending is implemented for eligible outbound
+      invoices and credit notes, but it depends on environment/API availability
+      and complete master data.
+    - Peppol participant reachability lookup is not implemented yet; if a
+      customer Peppol ID exists, the app notes that it was not verified before
+      transmission.
+    - No user authentication or multi-tenant database yet.
+    - No bank feed reconciliation yet.
+    - No closing entries / retained earnings workflow yet.
+
+
+31. PRODUCT ROADMAP IDEAS
+=========================
+
+Near-term:
+
+    - Add persistent database.
+    - Improve scanned PDF/OCR extraction and add more PDF layout handling.
+    - Add full PCMN chart.
+    - Add multi-line item extraction.
+    - Add supplier/customer master data management.
+    - Add Peppol participant lookup.
+    - Add document status history.
+    - Add export to accountant formats.
+
+Mid-term:
+
+    - Bank feed import and matching.
+    - Payment reconciliation.
+    - Approval workflows.
+    - Accountant review queue.
+    - Multi-company tenant support.
+    - Audit trail with immutable event log.
+    - Full VAT return preparation.
+
+Long-term:
+
+    - Autonomous invoice inbox.
+    - Vendor/customer risk checks.
+    - Cash forecast.
+    - Working capital dashboard.
+    - Accountant co-pilot.
+    - API platform for banks and fintechs.
+
+
+32. DEMO SCRIPT
+===============
+
+Opening:
+
+    "InvoiceAgent is e-invoicing that feels like WhatsApp, but every message
+    creates audit-grade proof: VAT, Peppol decisioning, Belgian account
+    allocation, balanced double-entry, trial balance, balance sheet, and P&L."
+
+Plumber:
+
+    "I type: I paid the plumber EUR 242 including 21% VAT. The app recognizes
+    that this is not just a bank movement. It is a paid supplier invoice."
+
+Show:
+
+    - Net EUR 200
+    - VAT EUR 42
+    - Gross EUR 242
+    - Account 611 Maintenance and repairs
+    - Dr 611 / Dr 411 / Cr 440
+    - Payment Dr 440 / Cr 550
+
+Say:
+
+    "Notice that the payable is created and then cleared. This is proper
+    accrual accounting, not just a cash shortcut."
+
+Compliance:
+
+    "Because this is an inbound supplier invoice, DemoCo is not the seller. The
+    system stages inbound evidence and explicitly does not transmit an outbound
+    Peppol invoice."
+
+Trial balance:
+
+    "The trial balance still keeps classic debit and credit columns, but now it
+    is grouped by account metadata: assets, liabilities, expenses, revenue."
+
+Acme invoice:
+
+    "Now I create a client invoice. DemoCo is the seller, Acme is the buyer, so
+    UBL/Peppol applies. In demo mode the payload is staged; in real mode the same
+    pipeline can attempt e-invoice.be transmission."
+
+Close:
+
+    "The key idea is separation of responsibility: AI understands the sentence,
+    deterministic accounting logic owns the books."
+
+
+33. COPY SNIPPETS FOR MARKETING
+===============================
+
+Feature bullets:
+
+    - Natural-language invoice capture
+    - Supplier invoice and payment split posting
+    - Deterministic VAT calculation
+    - Belgian PCMN-style account allocation
+    - Balanced double-entry journals
+    - Trial balance with account taxonomy
+    - Balance sheet and P&L summaries
+    - VAT recoverable/payable tracking
+    - UBL/Peppol compliance decision engine
+    - Payload preview and missing master data checks
+    - Demo-safe real API toggle
+
+
+Trust bullets:
+
+    - LLMs do not calculate VAT.
+    - Unbalanced entries are rejected.
+    - Payments are not mislabeled as UBL invoices.
+    - Inbound supplier invoices are not transmitted as outbound documents.
+    - Account classification is centralized and inspectable.
+    - Every transaction updates the ledger proof stack.
+
+
+Audience-specific positioning:
+
+SME owner:
+
+    "Send invoices and record expenses without learning accounting software."
+
+Accountant:
+
+    "Get structured journals, VAT, account allocation, and audit trails instead
+    of screenshots and messy messages."
+
+Fintech/bank:
+
+    "Turn banking transactions and invoice messages into compliant accounting
+    events."
+
+E-invoicing platform:
+
+    "Add an intelligence layer before UBL generation: intent, VAT, account
+    classification, and readiness checks."
+
+
+34. WHAT "SUPER REAL" SHOULD MEAN IN THE UI
+===========================================
+
+The UI should look production-grade without lying about backend state.
+
+Good:
+
+    - Clear status labels
+    - Professional account names
+    - Payload preview
+    - Missing fields
+    - Balanced books indicator
+    - Real accounting categories
+
+Avoid:
+
+    - "Demo mode" badges in the main header
+    - toy wording
+    - vague "skipped safely" language
+    - hiding compliance decisions
+    - saying a document was sent if it was only staged
+
+Best framing:
+
+    The top-level UI should feel like a real product.
+    Detailed compliance panels can still show exact audit status.
+
+
+35. FILE-BY-FILE TECHNICAL MAP
+==============================
+
+main.py
+-------
+
+Responsibilities:
+
+    - FastAPI app creation
+    - CORS middleware
+    - static file serving
+    - health endpoint
+    - chat endpoint
+    - PDF endpoint
+    - ledger endpoint
+    - reset endpoint
+    - chart endpoint
+    - scenario endpoint
+    - transaction processing orchestration
+    - human-readable reply generation
+
+
+extract.py
+----------
+
+Responsibilities:
+
+    - parse amounts
+    - parse counterparties
+    - infer descriptions
+    - classify intent/direction
+    - call optional LLM
+    - normalize invoice/payment object
+    - canonicalize VAT rate
+    - compute inclusive/exclusive VAT
+    - generate invoice IDs
+    - set seller/buyer fields
+
+
+bookkeeping.py
+--------------
+
+Responsibilities:
+
+    - Decimal money rounding
+    - journal line model
+    - journal entry model
+    - invoice to journal mapping
+    - payment clearing entries
+    - ledger posting
+    - trial balance
+    - grouped trial balance
+    - balance sheet summary
+    - P&L summary
+    - VAT/cash/AP/AR balances
+
+
+chart_of_accounts.py
+--------------------
+
+Responsibilities:
+
+    - account list
+    - allocation rules
+    - account metadata registry
+    - generic PCMN fallback classification
+    - chart catalog endpoint payload
+
+
+compliance.py
+-------------
+
+Responsibilities:
+
+    - environment/tenant info
+    - UBL/Peppol applicability decision
+    - payload preview construction
+    - missing field validation
+    - inbound staging
+    - outbound demo staging
+    - real API attempt when enabled
+    - stable compliance statuses
+
+
+static/index.html
+-----------------
+
+Responsibilities:
+
+    - entire visual interface
+    - scenario buttons
+    - chat messages
+    - proof tabs
+    - API calls
+    - rendering ledger/compliance/journal/allocation data
+
+
+tests/
+------
+
+Responsibilities:
+
+    - lock behavior
+    - prevent VAT regression
+    - prevent compliance status regression
+    - prevent accounting classification regression
+    - prevent journal balancing regression
+
+
+36. KEY DESIGN PRINCIPLES
+=========================
+
+1. AI assists, deterministic code decides.
+
+2. Every financial event must be explainable.
+
+3. VAT is money, so use Decimal.
+
+4. UBL applicability depends on document type and direction.
+
+5. Trial balance must remain classic debit/credit accounting.
+
+6. Presentation summaries must be derived from account metadata, not from
+   hand-wavy UI grouping.
+
+7. Inbound and outbound are not interchangeable.
+
+8. Payments are not invoices.
+
+9. Demo mode should not waste API credits.
+
+10. The UI should show proof, not just success.
+
+
+37. BEST SHORT DESCRIPTION
+==========================
+
+InvoiceAgent is a chat-first Belgian e-invoicing and accounting automation
+prototype. It converts plain-language business events into structured invoice
+data, deterministic VAT calculations, PCMN-style account allocation, balanced
+double-entry journals, financial reporting summaries, and UBL/Peppol compliance
+evidence.
+
+
+38. BEST ONE-SLIDE VERSION
+==========================
+
+Title:
+
+    InvoiceAgent
+
+Subtitle:
+
+    From plain language to Peppol-ready invoices and balanced books.
+
+Problem:
+
+    SMEs need e-invoicing compliance but do not want accounting software
+    complexity.
+
+Solution:
+
+    Chat/PDF input that creates VAT, UBL readiness, account allocation, journals,
+    trial balance, balance sheet, and P&L proof.
+
+Differentiator:
+
+    AI understands the message. Deterministic accounting logic owns the money.
+
+Demo proof:
+
+    "I paid the plumber EUR 242 incl. 21% VAT"
+
+    -> Net 200, VAT 42, Gross 242
+    -> Dr 611, Dr 411, Cr 440
+    -> Dr 440, Cr 550
+    -> Trial balance balanced
+    -> Inbound supplier invoice staged, no outbound Peppol transmission
+
+
+39. FINAL PRODUCT VISION
+========================
+
+InvoiceAgent can become the transaction intelligence layer between messy real
+business communication and formal accounting/compliance systems.
+
+Inputs:
+
+    - chat messages
+    - PDFs
+    - emails
+    - bank transactions
+    - supplier portals
+
+Outputs:
+
+    - e-invoice payloads
+    - accounting journals
+    - VAT reporting
+    - payment reconciliation
+    - audit evidence
+    - accountant review queues
+
+The long-term vision:
+
+    "Every SME transaction, from message to mandate-compliant e-invoice and
+    accountant-ready ledger, with proof at every step."
