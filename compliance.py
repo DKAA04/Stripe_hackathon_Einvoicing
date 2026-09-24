@@ -101,13 +101,8 @@ def send_einvoice_document(payload: dict) -> dict:
 
     tls_verify_disabled = False
     try:
-        try:
-            create_response = _post_json(create_url, payload, headers, True)
-        except httpx.ConnectError as exc:
-            if "CERTIFICATE_VERIFY_FAILED" not in str(exc):
-                raise
-            tls_verify_disabled = True
-            create_response = _post_json(create_url, payload, headers, False)
+        # Fail closed: credentials and invoice data must never cross unverified TLS.
+        create_response = _post_json(create_url, payload, headers, True)
         create_parsed = _parse_response(create_response)
         external_doc_id = _extract_external_doc_id(create_parsed)
         if not 200 <= create_response.status_code < 300:
@@ -136,7 +131,7 @@ def send_einvoice_document(payload: dict) -> dict:
             }
 
         send_url = f"{_base_url()}/api/documents/{external_doc_id}/send"
-        send_response = _post_json(send_url, None, headers, not tls_verify_disabled)
+        send_response = _post_json(send_url, None, headers, True)
         send_parsed = _parse_response(send_response)
         if 200 <= send_response.status_code < 300:
             return {

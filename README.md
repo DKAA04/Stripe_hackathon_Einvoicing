@@ -1,5 +1,9 @@
 # InvoiceAgent
 
+**[Explore the recorded browser demo](https://dkaa04.github.io/DKAA04/invoice.html)** · [Demo provenance](https://github.com/DKAA04/DKAA04/blob/main/SOURCE_NOTES.md)
+
+[![InvoiceAgent demonstration](https://raw.githubusercontent.com/DKAA04/DKAA04/main/invoice-preview.png)](https://dkaa04.github.io/DKAA04/invoice.html)
+
 **A conversational e-invoicing and bookkeeping prototype.**
 
 InvoiceAgent turns short invoice/payment descriptions or uploaded PDFs into structured records, account allocations, double-entry journal entries and a visible ledger. It demonstrates a useful separation: optional language-model extraction handles semantics, while monetary calculations and posting follow deterministic Python logic.
@@ -59,8 +63,10 @@ Company and recipient master-data settings are read in [compliance.py](complianc
 ## Checks
 
 ```bash
-python -m pytest tests
+python -m pytest tests test_transport_security.py
 ```
+
+[Transport-security maintenance and regression tests](TRANSPORT_SECURITY.md) document the fail-closed TLS change.
 
 Tests are included in the repository; passing tests do not establish regulatory compliance or successful live Peppol delivery.
 
@@ -68,7 +74,7 @@ Tests are included in the repository; passing tests do not establish regulatory 
 
 - The ledger and duplicate-send protection are in memory and reset on process restart.
 - Rule-based extraction supports a limited input vocabulary; review extracted amounts and counterparties.
-- The current external API client retries some certificate failures with TLS verification disabled. **Do not enable real transmission until this fallback is removed and certificate trust is configured correctly.**
+- External API requests fail closed on certificate errors; TLS verification remains enabled for both create and send requests. Configure certificate trust correctly before integration testing.
 - PDF upload handling, authentication, access controls and retention need hardening before a public deployment.
 - Demo recipient overrides exist in the integration code; inspect them before any external-service test.
 
